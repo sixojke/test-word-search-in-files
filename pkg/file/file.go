@@ -1,10 +1,10 @@
 package file
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strings"
 )
 
@@ -32,34 +32,117 @@ func FindFilesWithWord(dir string, fileNames []string, word string) ([]string, e
 	return targetFiles, resultError
 }
 
+// Ищет слово в отсортированном файле, если этого файла нет, создаёт его. В случае успеха добавляет файл по ссылке
 func addTargetFile(dir, fileName string, targetWord string, targetFiles *[]string) error {
-	file, err := os.Open(dir + "/" + fileName)
-	if err != nil {
-		return errors.New("error opening file: " + fileName)
-	}
+	filePath := dir + "/" + fileName
+	filePathSort := dir + "/" + fileName + "sort"
+	if IsExists(filePathSort) {
+		if err := findWordInSortedFile(filePathSort, fileName, targetWord, targetFiles); err != nil {
+			return err
+		}
+	} else {
+		if err := CreateSort(filePath, filePathSort); err != nil {
+			return err
+		}
 
-	defer file.Close()
-
-	b, err := io.ReadAll(file)
-	if err != nil {
-		return errors.New("error reading file: " + fileName)
-	}
-
-	words := strings.Split(cleanText(string(b)), " ")
-	for _, word := range words {
-		if strings.EqualFold(word, targetWord) {
-			*targetFiles = append(*targetFiles, fileName)
-			return nil
+		if err := findWordInSortedFile(filePathSort, fileName, targetWord, targetFiles); err != nil {
+			return err
 		}
 	}
 
 	return nil
 }
 
-func cleanText(text string) string {
-	return strings.NewReplacer(",", "", ".", "", ":", "").Replace(text)
+// Поиск слова в отсортированной файле при помощи бинарного поиска.
+func findWordInSortedFile(filePathSort string, fileName string, targetWord string, targetFiles *[]string) error {
+	text, err := ReadFile(filePathSort)
+	if err != nil {
+		return err
+	}
+
+	if binarySearch(strings.Fields(text), targetWord) {
+		*targetFiles = append(*targetFiles, fileName)
+	}
+
+	return nil
 }
 
+// Бинарный поиск таргет слова
+func binarySearch(sortedWords []string, target string) bool {
+	low := 0
+	high := len(sortedWords) - 1
+
+	for low <= high {
+		mid := (low + high) / 2
+		if sortedWords[mid] == target {
+			return true
+		} else if sortedWords[mid] < target {
+			low = mid + 1
+		} else {
+			high = mid - 1
+		}
+	}
+
+	return false
+}
+
+// Создаёт отсортированный файл с чистым текстом
+func CreateSort(fileName, fileNameSort string) error {
+	text, err := ReadFile(fileName)
+	if err != nil {
+		return err
+	}
+
+	text = cleanText(text)
+
+	words := strings.Fields(text)
+	sort.Strings(words)
+
+	if err := WriteFile(fileNameSort, strings.Join(words, " ")); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// Читает строку с файла
+func ReadFile(fileName string) (string, error) {
+	file, err := os.Open(fileName)
+	if err != nil {
+		return "", fmt.Errorf("error open file: %v", err)
+	}
+	defer file.Close()
+
+	b, err := io.ReadAll(file)
+	if err != nil {
+		return "", fmt.Errorf("error read file: %v", err)
+	}
+
+	return string(b), nil
+}
+
+// Записывает строку в файл
+func WriteFile(fileName, text string) error {
+	file, err := os.Create(fileName)
+	if err != nil {
+		return fmt.Errorf("error create file: %v", err)
+	}
+	defer file.Close()
+
+	_, err = file.WriteString(text)
+	if err != nil {
+		return fmt.Errorf("error write content: %v", err)
+	}
+
+	return nil
+}
+
+// Очищает текст от лишних точек, запятых ...
+func cleanText(text string) string {
+	return strings.NewReplacer(",", "", ".", "", ":", "", ";", "", "(", "", ")", "", "-", "").Replace(text)
+}
+
+// Возращает все файлы из указанной дирректории
 func FromDir(dir string) ([]string, error) {
 	files, err := os.ReadDir(dir)
 	if err != nil {
@@ -68,7 +151,9 @@ func FromDir(dir string) ([]string, error) {
 
 	var fileNames []string
 	for _, file := range files {
-		fileNames = append(fileNames, file.Name())
+		if !strings.Contains(file.Name(), "sort") {
+			fileNames = append(fileNames, file.Name())
+		}
 	}
 
 	if fileNames == nil {
@@ -76,4 +161,13 @@ func FromDir(dir string) ([]string, error) {
 	}
 
 	return fileNames, nil
+}
+
+// Проверяет существование файла
+func IsExists(fileName string) bool {
+	if _, err := os.Stat(fileName); err != nil {
+		return false
+	}
+
+	return true
 }
